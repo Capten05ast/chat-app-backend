@@ -43,14 +43,14 @@ app.use("/api/users", userRoutes);
 app.use("/api/groups", groupRoutes);
 app.use("/api/group-messages", groupMessageRoutes);
 
-// DEPLOYMENT — serve React build as static files
-app.use(express.static(path.join(__dirname, "../public")));
+// // DEPLOYMENT — serve React build as static files
+// app.use(express.static(path.join(__dirname, "../public")));
 
-// 🔥 Catch-all: send index.html for any non-API route
-// This makes React Router work correctly on page refresh in production
-app.get(/^(?!\/api).*/, (req, res) => {
-  res.sendFile(path.join(__dirname, "../public/index.html"));
-});
+// // 🔥 Catch-all: send index.html for any non-API route
+// // This makes React Router work correctly on page refresh in production
+// app.get(/^(?!\/api).*/, (req, res) => {
+//   res.sendFile(path.join(__dirname, "../public/index.html"));
+// });
 
 module.exports = app;
 
