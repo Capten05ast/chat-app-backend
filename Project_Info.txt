@@ -1,0 +1,9 @@
+
+
+COMMANDS :-
+> npm init -y
+> npm i express mongoose jsonwebtoken bcryptjs dotenv cookie-parser cookie uuid
+> npm i cors (for np in connection between backend and frontend)
+  app.js (require cors)
+
+> npm install socket.io
