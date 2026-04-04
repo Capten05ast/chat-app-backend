@@ -5,6 +5,25 @@ const Group = require("../models/group.model");
 const User = require("../models/user.model");
 const imagekit = require("../utils/imagekit");
 
+// ─────────────────────────────────────────────
+// HELPER: ensure every online member's socket is
+// joined to the group room before we emit.
+// Prevents the need for personal-room fallback emits
+// which cause double-delivery bugs.
+// ─────────────────────────────────────────────
+function ensureMembersInRoom(io, onlineUsers, groupId, members) {
+  members.forEach((member) => {
+    const id = member._id ? member._id.toString() : member.toString();
+    const socketId = onlineUsers?.get(id);
+    if (!socketId) return;
+    const socket = io.sockets.sockets.get(socketId);
+    if (socket && !socket.rooms.has(groupId.toString())) {
+      socket.join(groupId.toString());
+      console.log(`[room-heal] Re-joined member ${id} to group room ${groupId}`);
+    }
+  });
+}
+
 // 🔥 CREATE GROUP
 async function createGroup(req, res) {
   try {
@@ -93,45 +112,19 @@ async function acceptInvite(req, res) {
       }
     }
 
-    // Step 2: Also ensure ALL existing members' sockets are in the group room.
-    // This fixes the core bug — if the admin reconnected after creating the group,
-    // their socket is no longer in the room, so io.to(groupId) won't reach them.
-    group.members.forEach((member) => {
-      const memberId = member._id ? member._id.toString() : member.toString();
-      // Skip the user who just joined — already handled above
-      if (memberId === userId.toString()) return;
+    // Step 2: Heal the room — ensure ALL existing members' sockets are present.
+    // ensureMembersInRoom skips anyone already in the room so no double-joins.
+    ensureMembersInRoom(io, onlineUsers, groupId, group.members);
 
-      const memberSocketId = onlineUsers?.get(memberId);
-      if (memberSocketId) {
-        const memberSocket = io.sockets.sockets.get(memberSocketId);
-        if (memberSocket && !memberSocket.rooms.has(groupId.toString())) {
-          memberSocket.join(groupId.toString());
-          console.log(`Re-joined member ${memberId} to group room ${groupId}`);
-        }
-      }
-    });
-
-    // Step 3: Broadcast to the group room (now guaranteed to include all online members)
+    // Step 3: Single emit to the group room — reaches everyone exactly once.
+    // No personal-room fallback forEach needed (that was the double-emit bug).
     io.to(groupId.toString()).emit("group_member_joined", {
       groupId: group._id.toString(),
       members: group.members,
     });
 
-    // Step 4: FALLBACK — also emit directly to each member's personal room.
-    // This guarantees delivery even if a socket somehow missed the room join above.
-    group.members.forEach((member) => {
-      const memberId = member._id ? member._id.toString() : member.toString();
-      // Don't double-emit to the user who just joined (they get it via group room)
-      if (memberId === userId.toString()) return;
-
-      io.to(memberId).emit("group_member_joined", {
-        groupId: group._id.toString(),
-        members: group.members,
-      });
-    });
-
     console.log(
-      `Emitted group_member_joined to room + personal rooms for ${group.members.length} members`
+      `Emitted group_member_joined to room for ${group.members.length} members`
     );
 
     res.status(200).json({ message: "Joined group successfully" });
@@ -215,6 +208,7 @@ async function removeMember(req, res) {
     const io = req.app.get("io");
     const onlineUsers = req.app.get("onlineUsers");
 
+    // Kick the removed member's socket out of the group room
     const removedSocketId = onlineUsers?.get(memberId.toString());
     if (removedSocketId) {
       const removedSocket = io.sockets.sockets.get(removedSocketId);
@@ -224,7 +218,12 @@ async function removeMember(req, res) {
       }
     }
 
+    // Notify the removed user directly (they've left the room so can't get group emit)
     io.to(memberId.toString()).emit("removed_from_group", { groupId });
+
+    // Notify remaining members via group room — no forEach fallback needed,
+    // ensureMembersInRoom keeps the room healthy
+    ensureMembersInRoom(io, onlineUsers, groupId, populated.members);
 
     io.to(groupId.toString()).emit("group_members_updated", {
       groupId,
@@ -253,6 +252,8 @@ async function deleteGroup(req, res) {
 
     const io = req.app.get("io");
 
+    // Personal-room emit is correct here — group room is being destroyed,
+    // so each member needs a direct notification
     group.members.forEach((memberId) => {
       io.to(memberId.toString()).emit("group_deleted", { groupId });
     });
@@ -286,11 +287,14 @@ async function editGroupName(req, res) {
     await group.save();
 
     const io = req.app.get("io");
-    group.members.forEach((memberId) => {
-      io.to(memberId.toString()).emit("group_name_updated", {
-        groupId,
-        name: group.name,
-      });
+    const onlineUsers = req.app.get("onlineUsers");
+
+    // Heal room then single group-room emit
+    ensureMembersInRoom(io, onlineUsers, groupId, group.members);
+
+    io.to(groupId.toString()).emit("group_name_updated", {
+      groupId,
+      name: group.name,
     });
 
     res.status(200).json({ message: "Group name updated", name: group.name });
@@ -310,6 +314,5 @@ module.exports = {
   deleteGroup,
   editGroupName,
 };
-
 
 

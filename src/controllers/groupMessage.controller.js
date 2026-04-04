@@ -4,7 +4,28 @@
 const GroupMessage = require("../models/groupMessage.model");
 const Group = require("../models/group.model");
 
-// 🔥 GET GROUP MESSAGES
+// ─────────────────────────────────────────────
+// HELPER: ensure every online member's socket is
+// joined to the group room before we emit.
+// This replaces the old "fallback personal-room emit"
+// pattern which caused double-delivery bugs.
+// ─────────────────────────────────────────────
+function ensureMembersInRoom(io, onlineUsers, groupId, members) {
+  members.forEach((memberId) => {
+    const id = memberId._id ? memberId._id.toString() : memberId.toString();
+    const socketId = onlineUsers?.get(id);
+    if (!socketId) return;
+    const socket = io.sockets.sockets.get(socketId);
+    if (socket && !socket.rooms.has(groupId.toString())) {
+      socket.join(groupId.toString());
+      console.log(`[room-heal] Re-joined member ${id} to group room ${groupId}`);
+    }
+  });
+}
+
+// ─────────────────────────────────────────────
+// GET GROUP MESSAGES
+// ─────────────────────────────────────────────
 async function getGroupMessages(req, res) {
   try {
     const userId = req.user;
@@ -36,32 +57,26 @@ async function getGroupMessages(req, res) {
       const io = req.app.get("io");
       const onlineUsers = req.app.get("onlineUsers");
 
-      // Emit to group room first
+      // Heal the room first so io.to(groupId) reaches everyone
+      ensureMembersInRoom(io, onlineUsers, groupId, group.members);
+
+      // Single emit to the group room — no personal-room fallback needed
+      // because ensureMembersInRoom already fixed any missing joins
       io.to(groupId.toString()).emit("group_messages_seen", {
         groupId,
         seenBy: userId,
       });
-
-      // Fallback: also emit to each member's personal room in case their
-      // socket isn't in the group room (e.g. after a reconnect)
-      group.members.forEach((memberId) => {
-        const id = memberId._id ? memberId._id.toString() : memberId.toString();
-        if (id === userId.toString()) return; // no need to notify yourself
-        io.to(id).emit("group_messages_seen", {
-          groupId,
-          seenBy: userId,
-        });
-      });
     }
 
-    // Send response after all side effects are done
     res.status(200).json(messages);
   } catch (error) {
     res.status(500).json({ message: error.message });
   }
 }
 
-// 🔥 SEND GROUP MESSAGE
+// ─────────────────────────────────────────────
+// SEND GROUP MESSAGE
+// ─────────────────────────────────────────────
 async function sendGroupMessage(req, res) {
   try {
     const senderId = req.user;
@@ -87,21 +102,14 @@ async function sendGroupMessage(req, res) {
     const io = req.app.get("io");
     const onlineUsers = req.app.get("onlineUsers");
 
-    // Emit to group room
+    // Heal the room so every online member's socket is present,
+    // then ONE emit to the group room reaches everyone — no duplicate
+    // personal-room emits that caused the double-message bug.
+    ensureMembersInRoom(io, onlineUsers, groupId, group.members);
+
     io.to(groupId.toString()).emit("new_group_message", {
       groupId,
       message: populated,
-    });
-
-    // Fallback: emit to each member's personal room in case their socket
-    // missed the group room join (same fix as acceptInvite)
-    group.members.forEach((memberId) => {
-      const id = memberId._id ? memberId._id.toString() : memberId.toString();
-      if (id === senderId.toString()) return; // sender doesn't need their own message echoed
-      io.to(id).emit("new_group_message", {
-        groupId,
-        message: populated,
-      });
     });
 
     res.status(201).json(populated);
@@ -110,7 +118,9 @@ async function sendGroupMessage(req, res) {
   }
 }
 
-// 🗑️ DELETE GROUP MESSAGE
+// ─────────────────────────────────────────────
+// DELETE GROUP MESSAGE
+// ─────────────────────────────────────────────
 const imagekit = require("../utils/imagekit");
 
 async function deleteGroupMessage(req, res) {
@@ -131,7 +141,7 @@ async function deleteGroupMessage(req, res) {
       return res.status(403).json({ message: "You can only delete your own messages" });
     }
 
-    // 🔥 DELETE IMAGE FROM IMAGEKIT
+    // Delete image from ImageKit if present
     if (message.image && message.image.fileId) {
       try {
         await imagekit.deleteFile(message.image.fileId);
@@ -143,19 +153,14 @@ async function deleteGroupMessage(req, res) {
     await message.deleteOne();
 
     const io = req.app.get("io");
+    const onlineUsers = req.app.get("onlineUsers");
+
+    // Same pattern: heal the room first, then single group-room emit
+    ensureMembersInRoom(io, onlineUsers, groupId, group.members);
 
     io.to(groupId.toString()).emit("group_message_deleted", {
       groupId,
       messageId: message._id,
-    });
-
-    group.members.forEach((memberId) => {
-      const id = memberId._id ? memberId._id.toString() : memberId.toString();
-      if (id === userId.toString()) return;
-      io.to(id).emit("group_message_deleted", {
-        groupId,
-        messageId: message._id,
-      });
     });
 
     res.status(200).json({ message: "Message deleted" });
