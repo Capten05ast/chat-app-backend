@@ -1,7 +1,6 @@
 
 
 
-
 const GroupMessage = require("../models/groupMessage.model");
 const Group = require("../models/group.model");
 
@@ -111,7 +110,52 @@ async function sendGroupMessage(req, res) {
   }
 }
 
-module.exports = { getGroupMessages, sendGroupMessage };
+// 🗑️ DELETE GROUP MESSAGE
+async function deleteGroupMessage(req, res) {
+  try {
+    const userId = req.user;
+    const { groupId, messageId } = req.params;
 
+    const group = await Group.findById(groupId);
+    if (!group) return res.status(404).json({ message: "Group not found" });
+    if (!group.members.includes(userId)) {
+      return res.status(403).json({ message: "You are not a member of this group" });
+    }
+
+    const message = await GroupMessage.findById(messageId);
+    if (!message) return res.status(404).json({ message: "Message not found" });
+
+    // Only the sender can delete their own message
+    if (message.sender.toString() !== userId.toString()) {
+      return res.status(403).json({ message: "You can only delete your own messages" });
+    }
+
+    await message.deleteOne();
+
+    const io = req.app.get("io");
+
+    // Emit to group room first
+    io.to(groupId.toString()).emit("group_message_deleted", {
+      groupId,
+      messageId: message._id,
+    });
+
+    // Fallback: emit to each member's personal room — same pattern as sendGroupMessage
+    group.members.forEach((memberId) => {
+      const id = memberId._id ? memberId._id.toString() : memberId.toString();
+      if (id === userId.toString()) return; // no need to notify yourself
+      io.to(id).emit("group_message_deleted", {
+        groupId,
+        messageId: message._id,
+      });
+    });
+
+    res.status(200).json({ message: "Message deleted" });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+}
+
+module.exports = { getGroupMessages, sendGroupMessage, deleteGroupMessage };
 
 

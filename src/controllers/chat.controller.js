@@ -1,7 +1,6 @@
 
 
 
-
 const messageModel = require("../models/message.model");
 
 // 🚀 SEND MESSAGE (TEXT + IMAGE)
@@ -119,12 +118,43 @@ async function uploadImage(req, res) {
   }
 }
 
+// 🗑️ DELETE A MESSAGE
+async function deleteMessage(req, res) {
+  try {
+    const userId = req.user;
+    const { id } = req.params;
+
+    const message = await messageModel.findById(id);
+
+    if (!message) {
+      return res.status(404).json({ message: "Message not found" });
+    }
+
+    // Only the sender can delete their own message
+    if (message.senderId.toString() !== userId.toString()) {
+      return res.status(403).json({ message: "You can only delete your own messages" });
+    }
+
+    await message.deleteOne();
+
+    // Notify the receiver in real-time so their screen updates instantly
+    const io = req.app.get("io");
+    io.to(message.receiverId.toString()).emit("message_deleted", {
+      messageId: message._id,
+    });
+
+    res.status(200).json({ message: "Message deleted" });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+}
+
 module.exports = {
   sendMessage,
   getMessages,
   markAsSeen,
   uploadImage,
+  deleteMessage,
 };
-
 
 

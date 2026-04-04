@@ -1,5 +1,6 @@
 
 
+
 const express = require("express");
 const router = express.Router();
 
@@ -20,14 +21,17 @@ router.get("/:id", authMiddleware, messageControllers.getMessages);
 router.put("/seen", authMiddleware, messageControllers.markAsSeen);
 
 // UPLOAD TO IMAGEKIT
-
 router.post(
   "/upload",
   authMiddleware,
-  upload.single("image"), // 👈 VERY IMPORTANT
+  upload.single("image"),
   messageControllers.uploadImage
 );
 
+// DELETE A MESSAGE
+router.delete("/:id", authMiddleware, messageControllers.deleteMessage);
+
 module.exports = router;
+
 
 
