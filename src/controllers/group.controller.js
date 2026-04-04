@@ -1,6 +1,7 @@
 
 
 
+
 const Group = require("../models/group.model");
 const User = require("../models/user.model");
 
@@ -20,7 +21,6 @@ async function createGroup(req, res) {
       members: [adminId],
     });
 
-    // 🔥 admin's socket should join the group room immediately
     const io = req.app.get("io");
     const onlineUsers = req.app.get("onlineUsers");
     const adminSocketId = onlineUsers?.get(adminId.toString());
@@ -76,15 +76,14 @@ async function acceptInvite(req, res) {
         $addToSet: { members: userId },
       },
       { new: true }
-    ).populate("members", "-password");
+    ).populate("members", "-password"); // 🔥 populate so we send full member objects
 
     if (!group) return res.status(404).json({ message: "Group not found" });
 
     const io = req.app.get("io");
     const onlineUsers = req.app.get("onlineUsers");
 
-    // 🔥 KEY FIX: make the accepted user's socket join the group room
-    // so they instantly receive future group messages without refresh
+    // 🔥 make the accepted user's socket join the group room instantly
     const userSocketId = onlineUsers?.get(userId.toString());
     if (userSocketId) {
       const userSocket = io.sockets.sockets.get(userSocketId);
@@ -94,9 +93,13 @@ async function acceptInvite(req, res) {
       }
     }
 
-    // 🔥 tell all group members to refresh their group list
+    // 🔥 FIX: emit group_member_joined with populated members list to ALL current members
+    // This is what was missing — admin's tab now updates instantly without refresh
     group.members.forEach((member) => {
-      io.to(member._id.toString()).emit("group_member_joined", { groupId });
+      io.to(member._id.toString()).emit("group_member_joined", {
+        groupId: group._id.toString(),
+        members: group.members, // full populated member objects
+      });
     });
 
     res.status(200).json({ message: "Joined group successfully" });
@@ -176,7 +179,7 @@ async function removeMember(req, res) {
     const io = req.app.get("io");
     const onlineUsers = req.app.get("onlineUsers");
 
-    // 🔥 make removed user's socket LEAVE the group room
+    // make removed user's socket leave the group room
     const removedSocketId = onlineUsers?.get(memberId.toString());
     if (removedSocketId) {
       const removedSocket = io.sockets.sockets.get(removedSocketId);
@@ -186,10 +189,10 @@ async function removeMember(req, res) {
       }
     }
 
-    // 🔥 tell the removed user they got kicked
+    // tell the removed user they got kicked
     io.to(memberId.toString()).emit("removed_from_group", { groupId });
 
-    // 🔥 tell remaining members the updated list
+    // tell remaining members the updated list
     populated.members.forEach((member) => {
       io.to(member._id.toString()).emit("group_members_updated", {
         groupId,
@@ -217,7 +220,6 @@ async function deleteGroup(req, res) {
 
     const io = req.app.get("io");
 
-    // 🔥 notify all members the group was deleted
     group.members.forEach((memberId) => {
       io.to(memberId.toString()).emit("group_deleted", { groupId });
     });
@@ -229,8 +231,6 @@ async function deleteGroup(req, res) {
     res.status(500).json({ message: error.message });
   }
 }
-
-
 
 // 🔥 EDIT GROUP NAME — admin only
 async function editGroupName(req, res) {
@@ -250,7 +250,6 @@ async function editGroupName(req, res) {
     await group.save();
 
     const io = req.app.get("io");
-    // notify all members so their sidebar updates live
     group.members.forEach((memberId) => {
       io.to(memberId.toString()).emit("group_name_updated", {
         groupId,
@@ -264,7 +263,6 @@ async function editGroupName(req, res) {
   }
 }
 
-
 module.exports = {
   createGroup,
   inviteToGroup,
@@ -274,8 +272,7 @@ module.exports = {
   getPendingInvites,
   removeMember,
   deleteGroup,
-  editGroupName
+  editGroupName,
 };
-
 
 
