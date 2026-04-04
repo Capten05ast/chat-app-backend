@@ -22,12 +22,13 @@ const groupMessageSchema = new mongoose.Schema(
       default: "",
     },
 
+    // ✅ Changed from plain String to object — matches what the controller saves
+    // and what GroupMessage.jsx reads (msg.image?.url)
     image: {
-      type: String,
-      default: "",
+      url: { type: String, default: "" },
+      fileId: { type: String, default: "" },
     },
 
-    // 🔥 seen by which members
     seenBy: [
       {
         type: mongoose.Schema.Types.ObjectId,
@@ -39,7 +40,5 @@ const groupMessageSchema = new mongoose.Schema(
 );
 
 module.exports = mongoose.model("GroupMessage", groupMessageSchema);
-
-
 
 
