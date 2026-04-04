@@ -68,7 +68,6 @@ async function acceptInvite(req, res) {
     const userId = req.user;
     const { groupId } = req.body;
 
-    // Update DB — pull from pending, add to members
     const group = await Group.findByIdAndUpdate(
       groupId,
       {
@@ -93,15 +92,46 @@ async function acceptInvite(req, res) {
       }
     }
 
-    // Step 2: 🔥 Broadcast to the entire group room in one shot
-    // This hits every socket currently in that room — admin, other members, everyone
-    // No need to loop through members individually
-    io.to(groupId.toString()).emit("group_member_joined", {
-      groupId: group._id.toString(),
-      members: group.members, // fully populated
+    // Step 2: Also ensure ALL existing members' sockets are in the group room.
+    // This fixes the core bug — if the admin reconnected after creating the group,
+    // their socket is no longer in the room, so io.to(groupId) won't reach them.
+    group.members.forEach((member) => {
+      const memberId = member._id ? member._id.toString() : member.toString();
+      // Skip the user who just joined — already handled above
+      if (memberId === userId.toString()) return;
+
+      const memberSocketId = onlineUsers?.get(memberId);
+      if (memberSocketId) {
+        const memberSocket = io.sockets.sockets.get(memberSocketId);
+        if (memberSocket && !memberSocket.rooms.has(groupId.toString())) {
+          memberSocket.join(groupId.toString());
+          console.log(`Re-joined member ${memberId} to group room ${groupId}`);
+        }
+      }
     });
 
-    console.log(`Emitted group_member_joined to room ${groupId} with ${group.members.length} members`);
+    // Step 3: Broadcast to the group room (now guaranteed to include all online members)
+    io.to(groupId.toString()).emit("group_member_joined", {
+      groupId: group._id.toString(),
+      members: group.members,
+    });
+
+    // Step 4: FALLBACK — also emit directly to each member's personal room.
+    // This guarantees delivery even if a socket somehow missed the room join above.
+    group.members.forEach((member) => {
+      const memberId = member._id ? member._id.toString() : member.toString();
+      // Don't double-emit to the user who just joined (they get it via group room)
+      if (memberId === userId.toString()) return;
+
+      io.to(memberId).emit("group_member_joined", {
+        groupId: group._id.toString(),
+        members: group.members,
+      });
+    });
+
+    console.log(
+      `Emitted group_member_joined to room + personal rooms for ${group.members.length} members`
+    );
 
     res.status(200).json({ message: "Joined group successfully" });
   } catch (error) {
@@ -145,8 +175,10 @@ async function getPendingInvites(req, res) {
   try {
     const userId = req.user;
 
-    const groups = await Group.find({ pendingInvites: userId })
-      .populate("admin", "-password");
+    const groups = await Group.find({ pendingInvites: userId }).populate(
+      "admin",
+      "-password"
+    );
 
     res.status(200).json(groups);
   } catch (error) {
@@ -168,7 +200,9 @@ async function removeMember(req, res) {
       return res.status(403).json({ message: "Only admin can remove members" });
 
     if (memberId === adminId.toString())
-      return res.status(400).json({ message: "Admin cannot remove themselves" });
+      return res
+        .status(400)
+        .json({ message: "Admin cannot remove themselves" });
 
     group.members = group.members.filter(
       (id) => id.toString() !== memberId.toString()
@@ -180,7 +214,6 @@ async function removeMember(req, res) {
     const io = req.app.get("io");
     const onlineUsers = req.app.get("onlineUsers");
 
-    // Make removed user's socket leave the group room
     const removedSocketId = onlineUsers?.get(memberId.toString());
     if (removedSocketId) {
       const removedSocket = io.sockets.sockets.get(removedSocketId);
@@ -190,10 +223,8 @@ async function removeMember(req, res) {
       }
     }
 
-    // Tell the removed user they got kicked (personal room)
     io.to(memberId.toString()).emit("removed_from_group", { groupId });
 
-    // Tell remaining members via group room
     io.to(groupId.toString()).emit("group_members_updated", {
       groupId,
       members: populated.members,
@@ -215,7 +246,9 @@ async function deleteGroup(req, res) {
     if (!group) return res.status(404).json({ message: "Group not found" });
 
     if (group.admin.toString() !== adminId.toString())
-      return res.status(403).json({ message: "Only admin can delete the group" });
+      return res
+        .status(403)
+        .json({ message: "Only admin can delete the group" });
 
     const io = req.app.get("io");
 
@@ -238,12 +271,15 @@ async function editGroupName(req, res) {
     const { groupId } = req.params;
     const { name } = req.body;
 
-    if (!name?.trim()) return res.status(400).json({ message: "Name is required" });
+    if (!name?.trim())
+      return res.status(400).json({ message: "Name is required" });
 
     const group = await Group.findById(groupId);
     if (!group) return res.status(404).json({ message: "Group not found" });
     if (group.admin.toString() !== adminId.toString())
-      return res.status(403).json({ message: "Only admin can edit group name" });
+      return res
+        .status(403)
+        .json({ message: "Only admin can edit group name" });
 
     group.name = name.trim();
     await group.save();
@@ -273,5 +309,6 @@ module.exports = {
   deleteGroup,
   editGroupName,
 };
+
 
 

@@ -1,6 +1,7 @@
 
 
 
+
 const messageModel = require("../models/message.model");
 
 // 🚀 SEND MESSAGE (TEXT + IMAGE)
@@ -17,6 +18,12 @@ async function sendMessage(req, res) {
       seen: false,
     });
 
+    // ✅ No socket emit here — DM delivery is handled entirely by the
+    // client-side socket.emit("send_message") in ChatBox.jsx, which
+    // server.js picks up and forwards as "receive_message" to the receiver.
+    // Adding an extra emit here would use a different event name and
+    // could cause duplicate messages on the receiver's screen.
+
     res.status(201).json({
       message: "Message sent",
       data: newMessage,
@@ -29,25 +36,28 @@ async function sendMessage(req, res) {
 // 🚀 GET CHAT + MARK AS SEEN
 async function getMessages(req, res) {
   try {
-    const receiverId = req.user;      // logged-in user (they are receiving)
-    const senderId = req.params.id;   // the other person
+    const receiverId = req.user;
+    const senderId = req.params.id;
 
-    // 🔥 Mark messages from the other person as seen
-    await messageModel.updateMany(
-      {
-        senderId,
-        receiverId,
-        seen: false,
-      },
-      { seen: true }
-    );
+    // Only hit the DB + emit if there are actually unread messages —
+    // avoids a pointless write and socket event every time the chat is opened
+    const unreadCount = await messageModel.countDocuments({
+      senderId,
+      receiverId,
+      seen: false,
+    });
 
-    // 🔥 FIX: notify the original sender their messages were seen
-    // Uses the personal room (io.to(userId)) set up in server.js
-    const io = req.app.get("io");
-    io.to(senderId.toString()).emit("message_seen", { receiverId });
+    if (unreadCount > 0) {
+      await messageModel.updateMany(
+        { senderId, receiverId, seen: false },
+        { seen: true }
+      );
 
-    // Fetch full conversation
+      // Notify the sender their messages were seen so checkmarks update instantly
+      const io = req.app.get("io");
+      io.to(senderId.toString()).emit("message_seen", { receiverId });
+    }
+
     const messages = await messageModel
       .find({
         $or: [
@@ -63,20 +73,23 @@ async function getMessages(req, res) {
   }
 }
 
-// 🚀 MANUAL MARK AS SEEN (for socket fallback)
+// 🚀 MANUAL MARK AS SEEN (socket fallback — call from the client
+// when the chat is already open and a new incoming message arrives)
 async function markAsSeen(req, res) {
   try {
     const receiverId = req.user;
     const { senderId } = req.body;
 
-    await messageModel.updateMany(
+    // Only emit if there was actually something to mark
+    const result = await messageModel.updateMany(
       { senderId, receiverId, seen: false },
       { seen: true }
     );
 
-    // 🔥 Also notify via socket so sender's UI updates instantly
-    const io = req.app.get("io");
-    io.to(senderId.toString()).emit("message_seen", { receiverId });
+    if (result.modifiedCount > 0) {
+      const io = req.app.get("io");
+      io.to(senderId.toString()).emit("message_seen", { receiverId });
+    }
 
     res.status(200).json({ message: "Messages marked as seen" });
   } catch (error) {
