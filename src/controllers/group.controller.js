@@ -1,7 +1,6 @@
 
 
 
-
 const Group = require("../models/group.model");
 const User = require("../models/user.model");
 
@@ -69,6 +68,7 @@ async function acceptInvite(req, res) {
     const userId = req.user;
     const { groupId } = req.body;
 
+    // Update DB — pull from pending, add to members
     const group = await Group.findByIdAndUpdate(
       groupId,
       {
@@ -76,31 +76,32 @@ async function acceptInvite(req, res) {
         $addToSet: { members: userId },
       },
       { new: true }
-    ).populate("members", "-password"); // 🔥 populate so we send full member objects
+    ).populate("members", "-password");
 
     if (!group) return res.status(404).json({ message: "Group not found" });
 
     const io = req.app.get("io");
     const onlineUsers = req.app.get("onlineUsers");
 
-    // 🔥 make the accepted user's socket join the group room instantly
+    // Step 1: Make the new member's socket join the group room
     const userSocketId = onlineUsers?.get(userId.toString());
     if (userSocketId) {
       const userSocket = io.sockets.sockets.get(userSocketId);
       if (userSocket) {
         userSocket.join(groupId.toString());
-        console.log(`User ${userId} joined group room ${groupId} after accepting invite`);
+        console.log(`User ${userId} joined group room ${groupId}`);
       }
     }
 
-    // 🔥 FIX: emit group_member_joined with populated members list to ALL current members
-    // This is what was missing — admin's tab now updates instantly without refresh
-    group.members.forEach((member) => {
-      io.to(member._id.toString()).emit("group_member_joined", {
-        groupId: group._id.toString(),
-        members: group.members, // full populated member objects
-      });
+    // Step 2: 🔥 Broadcast to the entire group room in one shot
+    // This hits every socket currently in that room — admin, other members, everyone
+    // No need to loop through members individually
+    io.to(groupId.toString()).emit("group_member_joined", {
+      groupId: group._id.toString(),
+      members: group.members, // fully populated
     });
+
+    console.log(`Emitted group_member_joined to room ${groupId} with ${group.members.length} members`);
 
     res.status(200).json({ message: "Joined group successfully" });
   } catch (error) {
@@ -179,7 +180,7 @@ async function removeMember(req, res) {
     const io = req.app.get("io");
     const onlineUsers = req.app.get("onlineUsers");
 
-    // make removed user's socket leave the group room
+    // Make removed user's socket leave the group room
     const removedSocketId = onlineUsers?.get(memberId.toString());
     if (removedSocketId) {
       const removedSocket = io.sockets.sockets.get(removedSocketId);
@@ -189,15 +190,13 @@ async function removeMember(req, res) {
       }
     }
 
-    // tell the removed user they got kicked
+    // Tell the removed user they got kicked (personal room)
     io.to(memberId.toString()).emit("removed_from_group", { groupId });
 
-    // tell remaining members the updated list
-    populated.members.forEach((member) => {
-      io.to(member._id.toString()).emit("group_members_updated", {
-        groupId,
-        members: populated.members,
-      });
+    // Tell remaining members via group room
+    io.to(groupId.toString()).emit("group_members_updated", {
+      groupId,
+      members: populated.members,
     });
 
     res.status(200).json({ message: "Member removed successfully" });
