@@ -38,10 +38,12 @@ async function registerUser (req, res) {
     )
 
 
-    res.cookie("token", token, {
+    // ✅ CORRECT
+        res.cookie("token", token, {
         httpOnly: true,
-        sameSite: "lax",
-        secure: false, // true in production (https)
+        sameSite: process.env.NODE_ENV === "production" ? "None" : "Lax",
+        secure: process.env.NODE_ENV === "production" ? true : false,
+        maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
     });
     res.status(201).json({
         message: "User registered successfully",
@@ -71,11 +73,14 @@ async function loginUser (req, res) {
         process.env.JWT_SECRET
     )
 
+    // ✅ CORRECT
     res.cookie("token", token, {
         httpOnly: true,
-        sameSite: "lax",
-        secure: false, // true in production (https)
+        sameSite: process.env.NODE_ENV === "production" ? "None" : "Lax",
+        secure: process.env.NODE_ENV === "production" ? true : false,
+        maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
     });
+
     res.status(200).json({
         message: "User logged in successfully",
         user: {
@@ -90,7 +95,8 @@ async function logoutUser(req, res) {
     try {
         res.clearCookie("token", {
             httpOnly: true,
-            sameSite: "lax",
+            sameSite: process.env.NODE_ENV === "production" ? "None" : "Lax",
+            secure: process.env.NODE_ENV === "production" ? true : false,
         });
 
         res.status(200).json({
