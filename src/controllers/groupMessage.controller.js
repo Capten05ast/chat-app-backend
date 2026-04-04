@@ -111,6 +111,8 @@ async function sendGroupMessage(req, res) {
 }
 
 // 🗑️ DELETE GROUP MESSAGE
+const imagekit = require("../utils/imagekit");
+
 async function deleteGroupMessage(req, res) {
   try {
     const userId = req.user;
@@ -125,25 +127,31 @@ async function deleteGroupMessage(req, res) {
     const message = await GroupMessage.findById(messageId);
     if (!message) return res.status(404).json({ message: "Message not found" });
 
-    // Only the sender can delete their own message
     if (message.sender.toString() !== userId.toString()) {
       return res.status(403).json({ message: "You can only delete your own messages" });
+    }
+
+    // 🔥 DELETE IMAGE FROM IMAGEKIT
+    if (message.image && message.image.fileId) {
+      try {
+        await imagekit.deleteFile(message.image.fileId);
+      } catch (err) {
+        console.log("ImageKit delete error:", err.message);
+      }
     }
 
     await message.deleteOne();
 
     const io = req.app.get("io");
 
-    // Emit to group room first
     io.to(groupId.toString()).emit("group_message_deleted", {
       groupId,
       messageId: message._id,
     });
 
-    // Fallback: emit to each member's personal room — same pattern as sendGroupMessage
     group.members.forEach((memberId) => {
       const id = memberId._id ? memberId._id.toString() : memberId.toString();
-      if (id === userId.toString()) return; // no need to notify yourself
+      if (id === userId.toString()) return;
       io.to(id).emit("group_message_deleted", {
         groupId,
         messageId: message._id,

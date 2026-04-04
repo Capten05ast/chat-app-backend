@@ -25,8 +25,8 @@ const messageSchema = new mongoose.Schema(
     },
 
     image: {
-      type: String, // ImageKit URL (future)
-      default: "",
+      url: String,
+      fileId: String,
     },
 
     seen: {

@@ -2,6 +2,7 @@
 
 
 const messageModel = require("../models/message.model");
+const imagekit = require("../utils/imagekit");
 
 // 🚀 SEND MESSAGE (TEXT + IMAGE)
 async function sendMessage(req, res) {
@@ -9,19 +10,23 @@ async function sendMessage(req, res) {
     const senderId = req.user;
     const { receiverId, text, image } = req.body;
 
+    // 🔥 PREVENT EMPTY MESSAGE
+    if (!text && !image) {
+      return res.status(400).json({ message: "Message cannot be empty" });
+    }
+
     const newMessage = await messageModel.create({
       senderId,
       receiverId,
       text: text || "",
-      image: image || "",
+      image: image
+        ? {
+            url: image.url,
+            fileId: image.fileId,
+          }
+        : null,
       seen: false,
     });
-
-    // ✅ No socket emit here — DM delivery is handled entirely by the
-    // client-side socket.emit("send_message") in ChatBox.jsx, which
-    // server.js picks up and forwards as "receive_message" to the receiver.
-    // Adding an extra emit here would use a different event name and
-    // could cause duplicate messages on the receiver's screen.
 
     res.status(201).json({
       message: "Message sent",
@@ -38,8 +43,6 @@ async function getMessages(req, res) {
     const receiverId = req.user;
     const senderId = req.params.id;
 
-    // Only hit the DB + emit if there are actually unread messages —
-    // avoids a pointless write and socket event every time the chat is opened
     const unreadCount = await messageModel.countDocuments({
       senderId,
       receiverId,
@@ -52,7 +55,6 @@ async function getMessages(req, res) {
         { seen: true }
       );
 
-      // Notify the sender their messages were seen so checkmarks update instantly
       const io = req.app.get("io");
       io.to(senderId.toString()).emit("message_seen", { receiverId });
     }
@@ -72,14 +74,12 @@ async function getMessages(req, res) {
   }
 }
 
-// 🚀 MANUAL MARK AS SEEN (socket fallback — call from the client
-// when the chat is already open and a new incoming message arrives)
+// 🚀 MANUAL MARK AS SEEN
 async function markAsSeen(req, res) {
   try {
     const receiverId = req.user;
     const { senderId } = req.body;
 
-    // Only emit if there was actually something to mark
     const result = await messageModel.updateMany(
       { senderId, receiverId, seen: false },
       { seen: true }
@@ -97,8 +97,6 @@ async function markAsSeen(req, res) {
 }
 
 // 🖼️ UPLOAD IMAGE (MULTER + IMAGEKIT)
-const imagekit = require("../utils/imagekit");
-
 async function uploadImage(req, res) {
   try {
     const file = req.file;
@@ -110,15 +108,20 @@ async function uploadImage(req, res) {
     const response = await imagekit.upload({
       file: file.buffer,
       fileName: file.originalname,
+      folder: "whats-up",
     });
 
-    res.status(200).json({ url: response.url });
+    res.status(200).json({
+      url: response.url,
+      fileId: response.fileId,
+      filePath: response.filePath,
+    });
   } catch (error) {
     res.status(500).json({ message: error.message });
   }
 }
 
-// 🗑️ DELETE A MESSAGE
+// 🗑️ DELETE MESSAGE (WITH IMAGEKIT DELETE)
 async function deleteMessage(req, res) {
   try {
     const userId = req.user;
@@ -130,14 +133,21 @@ async function deleteMessage(req, res) {
       return res.status(404).json({ message: "Message not found" });
     }
 
-    // Only the sender can delete their own message
     if (message.senderId.toString() !== userId.toString()) {
       return res.status(403).json({ message: "You can only delete your own messages" });
     }
 
+    // 🔥 DELETE IMAGE FROM IMAGEKIT
+    if (message.image && message.image.fileId) {
+      try {
+        await imagekit.deleteFile(message.image.fileId);
+      } catch (err) {
+        console.log("ImageKit delete error:", err.message);
+      }
+    }
+
     await message.deleteOne();
 
-    // Notify the receiver in real-time so their screen updates instantly
     const io = req.app.get("io");
     io.to(message.receiverId.toString()).emit("message_deleted", {
       messageId: message._id,

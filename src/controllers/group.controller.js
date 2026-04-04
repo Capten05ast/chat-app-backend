@@ -3,6 +3,7 @@
 
 const Group = require("../models/group.model");
 const User = require("../models/user.model");
+const imagekit = require("../utils/imagekit");
 
 // 🔥 CREATE GROUP
 async function createGroup(req, res) {
