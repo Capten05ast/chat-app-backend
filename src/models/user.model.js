@@ -32,7 +32,14 @@ const userSchema = new mongoose.Schema(
       minlength: 6,
     },
 
+    // 🔥 Avatar URL — stored from ImageKit
     avatar: {
+      type: String,
+      default: "",
+    },
+
+    // 🔥 Avatar ImageKit fileId — needed to delete old pic when user updates
+    avatarFileId: {
       type: String,
       default: "",
     },
@@ -42,7 +49,6 @@ const userSchema = new mongoose.Schema(
       default: false,
     },
 
-    // 🔥 NEW: CONNECTION SYSTEM
     connections: [
       {
         type: mongoose.Schema.Types.ObjectId,
@@ -54,6 +60,4 @@ const userSchema = new mongoose.Schema(
 );
 
 module.exports = mongoose.model("User", userSchema);
-
-
 

@@ -15,14 +15,11 @@ const server = http.createServer(app);
 
 const io = new Server(server, {
   cors: {
-    // origin: "http://localhost:5173",
     origin: process.env.CLIENT_URL,
     credentials: true,
   },
 });
 
-// 🔥 onlineUsers Map — only used for tracking who's online
-// NOT used for message routing anymore (we use rooms instead)
 const onlineUsers = new Map();
 
 app.set("io", io);
@@ -34,13 +31,10 @@ io.on("connection", (socket) => {
   // JOIN
   socket.on("join", async (userId) => {
     onlineUsers.set(userId, socket.id);
-
-    // 🔥 Each user joins a personal room named after their userId
-    // This means io.to(userId) works from anywhere — controllers, here, anywhere
     socket.join(userId);
     console.log("User joined personal room:", userId);
 
-    // 🔥 Also join all group rooms so io.to(groupId) reaches them
+    // Join all group rooms
     try {
       const groups = await Group.find({ members: userId });
       groups.forEach((group) => {
@@ -55,25 +49,21 @@ io.on("connection", (socket) => {
   });
 
   // SEND MESSAGE
-  // 🔥 FIX: use io.to(receiverId) room instead of looking up socket ID from Map
   socket.on("send_message", (data) => {
     io.to(data.receiverId).emit("receive_message", data);
   });
 
-  // ✍️ TYPING
-  // 🔥 FIX: use io.to(receiverId) room
+  // TYPING
   socket.on("typing", ({ senderId, receiverId }) => {
     io.to(receiverId).emit("typing", { senderId });
   });
 
-  // 🛑 STOP TYPING
-  // 🔥 FIX: use io.to(receiverId) room
+  // STOP TYPING
   socket.on("stop_typing", ({ senderId, receiverId }) => {
     io.to(receiverId).emit("stop_typing", { senderId });
   });
 
   // SEEN
-  // 🔥 FIX: use io.to(senderId) room — notify the original message sender
   socket.on("seen", ({ senderId, receiverId }) => {
     io.to(senderId).emit("message_seen", { receiverId });
   });
@@ -96,7 +86,6 @@ const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
-
 
 
 
