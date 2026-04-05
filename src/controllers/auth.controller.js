@@ -1,121 +1,95 @@
 
 
 
-
-
 const userModel = require("../models/user.model");
-const bcrypt = require("bcryptjs")
+const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 
 require("dotenv").config();
 
+async function registerUser(req, res) {
+  const { fullName: { firstName, lastName }, email, password } = req.body;
 
-async function registerUser (req, res) {
-    const { fullName : {firstName, lastName}, email, password } = req.body;
-    const isUserAlredyExists = await userModel.findOne({ email });
+  const isUserAlreadyExists = await userModel.findOne({ email });
+  if (isUserAlreadyExists) {
+    return res.status(400).json({ message: "User already exists" });
+  }
 
+  const hashPassword = await bcrypt.hash(password, 10);
+  const user = await userModel.create({
+    fullName: { firstName, lastName },
+    email,
+    password: hashPassword,
+  });
 
-    if (isUserAlredyExists) {
-        return res.status(400).json( {
-            message: "User already exists"
-        })
-    }
+  const token = jwt.sign({ id: user._id }, process.env.JWT_SECRET);
 
+  res.cookie("token", token, {
+    httpOnly: true,
+    sameSite: process.env.NODE_ENV === "production" ? "None" : "Lax",
+    secure: process.env.NODE_ENV === "production" ? true : false,
+    maxAge: 7 * 24 * 60 * 60 * 1000,
+  });
 
-    const hashPassword = await bcrypt.hash(password, 10);
-    const user = await userModel.create({
-        fullName: {
-            firstName, lastName
-        },
-        email,
-        password: hashPassword
-    })
-
-
-    const token = jwt.sign(
-        {id: user._id},
-        process.env.JWT_SECRET,
-    )
-
-
-    // ✅ CORRECT
-        res.cookie("token", token, {
-        httpOnly: true,
-        sameSite: process.env.NODE_ENV === "production" ? "None" : "Lax",
-        secure: process.env.NODE_ENV === "production" ? true : false,
-        maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
-    });
-    res.status(201).json({
-        message: "User registered successfully",
-        user: {
-            email: user.email,
-            _id: user._id,
-            fullName: user.fullName
-        }
-    })
+  res.status(201).json({
+    message: "User registered successfully",
+    user: {
+      email: user.email,
+      _id: user._id,
+      fullName: user.fullName,
+    },
+  });
 }
 
+async function loginUser(req, res) {
+  const { email, password } = req.body;
 
-async function loginUser (req, res) {
+  const user = await userModel.findOne({ email });
 
-    const { email, password } = req.body
+  if (!user) {
+    return res.status(400).json({ message: "Invalid email or password" });
+  }
 
-    const user = await userModel.findOne({
-        email
-    })
+  // ✅ THE MISSING CHECK — compare entered password against stored hash
+  const isMatch = await bcrypt.compare(password, user.password);
+  if (!isMatch) {
+    return res.status(400).json({ message: "Invalid email or password" });
+  }
 
-    if (!user) {
-        return res.status(400).json({message: "Invalid email or password"});
-    }
+  const token = jwt.sign({ id: user._id }, process.env.JWT_SECRET);
 
-    const token = jwt.sign(
-        {id: user._id},
-        process.env.JWT_SECRET
-    )
+  res.cookie("token", token, {
+    httpOnly: true,
+    sameSite: process.env.NODE_ENV === "production" ? "None" : "Lax",
+    secure: process.env.NODE_ENV === "production" ? true : false,
+    maxAge: 7 * 24 * 60 * 60 * 1000,
+  });
 
-    // ✅ CORRECT
-    res.cookie("token", token, {
-        httpOnly: true,
-        sameSite: process.env.NODE_ENV === "production" ? "None" : "Lax",
-        secure: process.env.NODE_ENV === "production" ? true : false,
-        maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
-    });
-
-    res.status(200).json({
-        message: "User logged in successfully",
-        user: {
-            email: user.email,
-            _id: user._id,
-            fullName: user.fullName
-        }
-    })
+  res.status(200).json({
+    message: "User logged in successfully",
+    user: {
+      email: user.email,
+      _id: user._id,
+      fullName: user.fullName,
+    },
+  });
 }
 
 async function logoutUser(req, res) {
-    try {
-        res.clearCookie("token", {
-            httpOnly: true,
-            sameSite: process.env.NODE_ENV === "production" ? "None" : "Lax",
-            secure: process.env.NODE_ENV === "production" ? true : false,
-        });
+  try {
+    res.clearCookie("token", {
+      httpOnly: true,
+      sameSite: process.env.NODE_ENV === "production" ? "None" : "Lax",
+      secure: process.env.NODE_ENV === "production" ? true : false,
+    });
 
-        res.status(200).json({
-            message: "User logged out successfully"
-        });
-    } catch (error) {
-        res.status(500).json({
-            message: error.message
-        });
-    }
+    res.status(200).json({ message: "User logged out successfully" });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
 }
 
-
-module.exports = {
-    registerUser,
-    loginUser,
-    logoutUser
-}
-
+module.exports = { registerUser, loginUser, logoutUser };
 
 
 
