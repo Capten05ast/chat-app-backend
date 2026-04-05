@@ -6,7 +6,7 @@ const router = express.Router();
 
 const userControllers = require("../controllers/user.controller");
 const authMiddleware  = require("../middlewares/auth.middleware");
-const upload          = require("../middlewares/multer.middleware"); // same multer used for messages
+const upload          = require("../middlewares/upload.middleware"); // same multer used for messages
 
 // GET CURRENT USER
 router.get("/me", authMiddleware, userControllers.getCurrentUser);
